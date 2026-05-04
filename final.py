@@ -1,3 +1,6 @@
+# Standard library imports used by the toolkit.
+# These modules handle files, pattern matching, reports, networking, hashing,
+# threading, dates, and the graphical interface.
 import os
 import re
 import csv
@@ -7,9 +10,15 @@ import socket
 import hashlib
 import threading
 import datetime as dt
+
+# Tkinter is Python's built-in GUI library. ttk gives cleaner-looking widgets.
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+
+# Queue lets background threads safely send results back to the GUI thread.
 from queue import Queue, Empty
+
+# URL, SSL, and HTTP tools used by the phishing, header, and directory scanners.
 from urllib.parse import urlparse
 import ssl
 import urllib.request
@@ -85,6 +94,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ------------------------------------------------------------
 # This is an educational / portfolio tool.
 # Use network scanning only on systems you own or are authorized to test.
+#
+# Comment style in this version:
+# - Comments explain the purpose of major blocks and important logic.
+# - Simple lines are left readable instead of being over-commented.
 # ============================================================
 
 # ------------------------------
@@ -294,9 +307,12 @@ class ToolkitApp:
     """
 
     def __init__(self, root):
+        # Store the main Tkinter window and apply the base window settings.
         self.root = root
         self.root.title(APP_TITLE)
         self.root.geometry(APP_GEOMETRY)
+
+        # Apply the custom dark theme before building any widgets.
         DarkStyle.apply(root)
 
         # Queue is used to safely pass messages from background threads
@@ -324,8 +340,11 @@ class ToolkitApp:
             "last_audit_findings": 0,
         }
 
+        # Build all tabs/widgets, then populate the dashboard with default values.
         self.build_ui()
         self.update_dashboard()
+
+        # Start checking the thread-safe queue every 120ms for scan results.
         self.root.after(120, self.process_queue)
 
     # ============================================================
@@ -350,6 +369,7 @@ class ToolkitApp:
         ttk.Button(toolbar, text="Save Local IOC DB", style="Dark.TButton", command=self.save_local_threat_db).pack(side="left", padx=8)
         ttk.Button(toolbar, text="About", style="Dark.TButton", command=self.show_about).pack(side="left")
 
+        # Notebook creates the tabbed layout for the whole toolkit.
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=12, pady=8)
 
@@ -365,6 +385,7 @@ class ToolkitApp:
         self.recon_tab = ttk.Frame(self.notebook, style="Dark.TFrame")
         self.audit_tab = ttk.Frame(self.notebook, style="Dark.TFrame")
 
+        # Add each tool tab to the notebook.
         self.notebook.add(self.dashboard_tab, text="Dashboard")
         self.notebook.add(self.phishing_tab, text="Phishing Analyzer")
         self.notebook.add(self.network_tab, text="Network Scanner")
@@ -377,6 +398,7 @@ class ToolkitApp:
         self.notebook.add(self.recon_tab, text="Subdomain Recon")
         self.notebook.add(self.audit_tab, text="Password Audit")
 
+        # Build the contents inside each tab.
         self.build_dashboard_tab()
         self.build_phishing_tab()
         self.build_network_tab()
@@ -546,10 +568,15 @@ class ToolkitApp:
             self.phish_output.insert(tk.END, "Paste or load a message first.\n", "warn")
             return
 
+        # Lowercase copy makes keyword matching easier without changing the original text.
         lowered = text.lower()
+
+        # Score tracks total risk; findings stores reasons shown to the user.
         score = 0
         findings = []
 
+        # Check the message against suspicious words/phrases.
+        # Each match adds points based on how risky that phrase is.
         matched_keywords = []
         for word, points in PHISHING_KEYWORDS.items():
             if word in lowered:
@@ -559,6 +586,7 @@ class ToolkitApp:
         if matched_keywords:
             findings.append(("Suspicious wording", matched_keywords[:25], "warn"))
 
+        # Extract URLs and inspect each one for common phishing red flags.
         urls = URL_REGEX.findall(text)
         suspicious_urls = []
         for url in urls:
@@ -718,6 +746,7 @@ class ToolkitApp:
         self.state["last_open_ports"] = 0
         self.update_dashboard()
 
+        # Run the actual scan in the background so the GUI stays responsive.
         thread = threading.Thread(target=self.scan_ports_thread, args=(target, start_port, end_port), daemon=True)
         thread.start()
 
@@ -740,11 +769,13 @@ class ToolkitApp:
 
         for port in range(start_port, end_port + 1):
             try:
+                # Create a TCP socket, set a short timeout, and attempt a connection.
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.settimeout(0.35)
                 result = s.connect_ex((target, port))
 
                 if result == 0:
+                    # A return value of 0 means the port accepted the connection.
                     service = COMMON_PORTS.get(port, "Unknown")
                     banner = self.try_banner_grab(target, port)
                     open_ports.append((port, service, banner))
@@ -866,10 +897,12 @@ class ToolkitApp:
             self.log_output.insert(tk.END, f"Error reading log: {e}\n", "danger")
             return
 
+        # findings = suspicious log lines; ip_counts = how often each IP appears.
         findings = []
         ip_counts = {}
         total_score = 0
 
+        # Review each log line and compare it to the regex pattern list.
         for idx, line in enumerate(lines, start=1):
             line_score = 0
             matched = []
@@ -979,6 +1012,7 @@ class ToolkitApp:
             sha1_hash = hashlib.sha1()
             sha256_hash = hashlib.sha256()
 
+            # Read in chunks so large files do not have to be loaded into memory at once.
             with open(self.hash_path, "rb") as f:
                 while True:
                     chunk = f.read(8192)
@@ -1087,6 +1121,7 @@ class ToolkitApp:
         result = None
         kind = None
 
+        # Figure out what type of indicator the user entered, then check the matching DB section.
         if IP_REGEX.fullmatch(indicator):
             kind = "IP"
             result = LOCAL_THREAT_DB["ips"].get(indicator)
@@ -1094,7 +1129,7 @@ class ToolkitApp:
             kind = "Domain"
             result = LOCAL_THREAT_DB["domains"].get(indicator)
         else:
-            # Very rough heuristic: if it's 32/40/64 hex chars, treat it as a hash.
+            # Very rough heuristic: MD5=32 hex, SHA1=40 hex, SHA256=64 hex.
             if re.fullmatch(r"[a-fA-F0-9]{32}|[a-fA-F0-9]{40}|[a-fA-F0-9]{64}", indicator):
                 kind = "Hash"
                 result = LOCAL_THREAT_DB["hashes"].get(indicator)
@@ -1412,6 +1447,7 @@ class ToolkitApp:
         ).start()
 
     def directory_scan_thread(self, base_url):
+        # Built-in mini wordlist used when the user does not load their own file.
         built_in = [
             "admin",
             "login",
@@ -1451,6 +1487,7 @@ class ToolkitApp:
         self.scan_queue.put(("dir", f"Target: {base_url}\n", "accent"))
         self.scan_queue.put(("dir", f"Paths Tested: {min(len(words), 500)}\n\n", "muted"))
 
+        # Limit scans to 500 paths to keep the classroom demo safe and manageable.
         for word in words[:500]:
             url = f"{base_url}/{word}"
 
@@ -1554,6 +1591,7 @@ class ToolkitApp:
         threading.Thread(target=self.subdomain_recon_thread, args=(domain,), daemon=True).start()
 
     def subdomain_recon_thread(self, domain):
+        # Common prefixes are combined with the domain and resolved through DNS.
         prefixes = ["www", "mail", "remote", "vpn", "portal", "admin", "dev", "test", "staging", "api", "blog", "shop", "support", "docs", "ftp"]
         found = 0
         for prefix in prefixes:
@@ -1605,6 +1643,7 @@ class ToolkitApp:
             self.audit_output.insert(tk.END, "Paste username,password pairs first.\n", "warn")
             return
 
+        # Local blocklist of weak/common passwords for a safe offline audit demo.
         weak_list = {"password", "password1", "password123", "admin", "admin123", "welcome", "welcome1", "qwerty", "letmein", "summer2024", "winter2024", "spring2024"}
         findings = 0
         total = 0
@@ -1742,6 +1781,7 @@ class ToolkitApp:
             while True:
                 source, message, tag = self.scan_queue.get_nowait()
 
+                # Route each queued message to the correct output box or dashboard value.
                 if source == "net":
                     self.net_output.insert(tk.END, message, tag)
                     self.net_output.see(tk.END)
