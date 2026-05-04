@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import ssl
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ============================================================
 # LEVEL ZERO SECURITY TOOLKIT
@@ -1232,9 +1233,11 @@ class ToolkitApp:
         """Checks common HTTP security headers that help protect websites."""
         url = self.header_url_entry.get().strip()
         self.header_output.delete("1.0", tk.END)
+
         if not url:
             self.header_output.insert(tk.END, "Enter a URL first.\n", "warn")
             return
+
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
 
@@ -1248,29 +1251,64 @@ class ToolkitApp:
         }
 
         try:
-            req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "LevelZeroToolkit/1.0"})
+            # Use GET instead of HEAD because some websites do not return all headers on HEAD requests
+            req = urllib.request.Request(
+                url,
+                method="GET",
+                headers={
+                    "User-Agent": "Mozilla/5.0 LevelZeroToolkit/1.0"
+                }
+            )
+
             context = ssl.create_default_context()
-            with urllib.request.urlopen(req, timeout=6, context=context) as response:
+
+            with urllib.request.urlopen(req, timeout=8, context=context) as response:
                 headers = {k.lower(): v for k, v in response.headers.items()}
                 status = response.status
+                final_url = response.geturl()
+
         except Exception as e:
             self.header_output.insert(tk.END, f"Could not scan URL: {e}\n", "danger")
             return
 
         present = 0
+
         self.header_output.insert(tk.END, f"Scanned: {url}\n", "accent")
+        self.header_output.insert(tk.END, f"Final URL: {final_url}\n", "accent")
         self.header_output.insert(tk.END, f"HTTP Status: {status}\n\n", "muted")
+
         for header, reason in required.items():
             if header in headers:
                 present += 1
                 self.header_output.insert(tk.END, f"[FOUND] {header}\n", "safe")
                 self.header_output.insert(tk.END, f"  Value: {headers[header][:180]}\n", "muted")
             else:
-                self.header_output.insert(tk.END, f"[MISSING] {header}\n", "danger")
+                self.header_output.insert(
+                    tk.END,
+                    f"[INFO] {header} not observed in this response\n",
+                    "warn"
+                )
+
             self.header_output.insert(tk.END, f"  Purpose: {reason}\n\n", "muted")
 
         score = round((present / len(required)) * 100)
-        self.header_output.insert(tk.END, f"Security Header Score: {score}/100\n", "safe" if score >= 80 else "warn" if score >= 50 else "danger")
+
+        if score >= 80:
+            rating = "Strong"
+            tag = "safe"
+        elif score >= 50:
+            rating = "Moderate"
+            tag = "warn"
+        else:
+            rating = "Needs Review"
+            tag = "danger"
+
+        self.header_output.insert(
+            tk.END,
+            f"Security Header Score: {score}/100 - {rating}\n",
+            tag
+        )
+
         self.state["last_header_score"] = f"{score}/100"
         self.update_dashboard()
 
@@ -1285,26 +1323,67 @@ class ToolkitApp:
         controls.pack(fill="x", pady=(0, 8))
 
         ttk.Label(controls, text="Base URL:", style="Panel.TLabel").grid(row=0, column=0, sticky="w")
-        self.dir_url_entry = tk.Entry(controls, bg=BLACKISH, fg=TEXT, insertbackground=TEXT, relief="flat", font=("Consolas", 10), width=50)
+        self.dir_url_entry = tk.Entry(
+            controls,
+            bg=BLACKISH,
+            fg=TEXT,
+            insertbackground=TEXT,
+            relief="flat",
+            font=("Consolas", 10),
+            width=50
+        )
         self.dir_url_entry.grid(row=0, column=1, padx=8, sticky="w")
-        self.dir_url_entry.insert(0, "http://127.0.0.1")
+        self.dir_url_entry.insert(0, "http://testphp.vulnweb.com")
 
-        ttk.Label(controls, text="Wordlist file:", style="Panel.TLabel").grid(row=1, column=0, sticky="w", pady=(8,0))
-        self.dir_wordlist_label = ttk.Label(controls, text="Using built-in list", style="Panel.TLabel")
-        self.dir_wordlist_label.grid(row=1, column=1, sticky="w", pady=(8,0))
+        ttk.Label(controls, text="Wordlist file:", style="Panel.TLabel").grid(row=1, column=0, sticky="w", pady=(8, 0))
+
+        self.dir_wordlist_label = ttk.Label(
+            controls,
+            text="Using built-in list",
+            style="Panel.TLabel"
+        )
+        self.dir_wordlist_label.grid(row=1, column=1, sticky="w", pady=(8, 0))
+
         self.dir_wordlist_path = ""
 
-        ttk.Button(controls, text="Load Wordlist", style="Dark.TButton", command=self.load_dir_wordlist).grid(row=1, column=2, padx=8, pady=(8,0))
-        ttk.Button(controls, text="Start Directory Scan", style="Accent.TButton", command=self.start_directory_scan).grid(row=0, column=2, padx=8)
-        ttk.Button(controls, text="Clear", style="Dark.TButton", command=lambda: self.clear_text(self.dir_output)).grid(row=0, column=3)
+        ttk.Button(
+            controls,
+            text="Load Wordlist",
+            style="Dark.TButton",
+            command=self.load_dir_wordlist
+        ).grid(row=1, column=2, padx=8, pady=(8, 0))
 
-        ttk.Label(controls, text="Use only on websites you own or have permission to test.", style="Panel.TLabel").grid(row=2, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        ttk.Button(
+            controls,
+            text="Start Directory Scan",
+            style="Accent.TButton",
+            command=self.start_directory_scan
+        ).grid(row=0, column=2, padx=8)
+
+        ttk.Button(
+            controls,
+            text="Clear",
+            style="Dark.TButton",
+            command=lambda: self.clear_text(self.dir_output)
+        ).grid(row=0, column=3)
+
+        ttk.Label(
+            controls,
+            text="Use only on websites you own or have permission to test.",
+            style="Panel.TLabel"
+        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(10, 0))
 
         out_wrap, self.dir_output = make_scrolled_text(container, height=27)
         out_wrap.pack(fill="both", expand=True)
 
     def load_dir_wordlist(self):
-        path = filedialog.askopenfilename(filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+        path = filedialog.askopenfilename(
+            filetypes=[
+                ("Text files", "*.txt"),
+                ("All files", "*.*")
+            ]
+        )
+
         if path:
             self.dir_wordlist_path = path
             self.dir_wordlist_label.config(text=os.path.basename(path))
@@ -1312,43 +1391,136 @@ class ToolkitApp:
     def start_directory_scan(self):
         base_url = self.dir_url_entry.get().strip().rstrip("/")
         self.dir_output.delete("1.0", tk.END)
+
         if not base_url:
             self.dir_output.insert(tk.END, "Enter a base URL first.\n", "warn")
             return
+
         if not base_url.startswith(("http://", "https://")):
             base_url = "http://" + base_url
-        self.dir_output.insert(tk.END, f"Starting directory scan against {base_url}\n", "accent")
-        threading.Thread(target=self.directory_scan_thread, args=(base_url,), daemon=True).start()
+
+        self.dir_output.insert(
+            tk.END,
+            f"Starting directory scan against {base_url}\n",
+            "accent"
+        )
+
+        threading.Thread(
+            target=self.directory_scan_thread,
+            args=(base_url,),
+            daemon=True
+        ).start()
 
     def directory_scan_thread(self, base_url):
-        built_in = ["admin", "login", "dashboard", "uploads", "backup", "backups", "config", "test", "dev", "api", "portal", "robots.txt", ".git", ".env"]
+        built_in = [
+            "admin",
+            "login",
+            "dashboard",
+            "uploads",
+            "backup",
+            "backups",
+            "config",
+            "test",
+            "dev",
+            "api",
+            "portal",
+            "robots.txt",
+            ".git",
+            ".env"
+        ]
+
         words = built_in
+
         if self.dir_wordlist_path:
             try:
                 with open(self.dir_wordlist_path, "r", encoding="utf-8", errors="ignore") as f:
                     words = [x.strip().lstrip("/") for x in f if x.strip()]
+
             except Exception as e:
                 self.scan_queue.put(("dir", f"Could not read wordlist: {e}\n", "danger"))
                 return
 
         found = 0
+        restricted = 0
+        not_found = 0
+        errors = 0
+
+        self.scan_queue.put(("dir", "\n" + "=" * 70 + "\n", "accent"))
+        self.scan_queue.put(("dir", "                 DIRECTORY SCAN REPORT\n", "accent"))
+        self.scan_queue.put(("dir", "=" * 70 + "\n\n", "accent"))
+        self.scan_queue.put(("dir", f"Target: {base_url}\n", "accent"))
+        self.scan_queue.put(("dir", f"Paths Tested: {min(len(words), 500)}\n\n", "muted"))
+
         for word in words[:500]:
             url = f"{base_url}/{word}"
+
             try:
-                req = urllib.request.Request(url, method="GET", headers={"User-Agent": "LevelZeroToolkit/1.0"})
+                req = urllib.request.Request(
+                    url,
+                    method="GET",
+                    headers={"User-Agent": "LevelZeroToolkit/1.0"}
+                )
+
                 with urllib.request.urlopen(req, timeout=3) as response:
                     code = response.status
-                    if code in (200, 204, 301, 302, 307, 308, 401, 403):
+
+                    if code in (200, 204, 301, 302, 307, 308):
                         found += 1
-                        self.scan_queue.put(("dir", f"[FOUND] {code}  {url}\n", "safe" if code == 200 else "warn"))
+                        self.scan_queue.put(
+                            ("dir", f"[FOUND]      {code}  {url}\n", "safe")
+                        )
+
+                    elif code in (401, 403):
+                        restricted += 1
+                        self.scan_queue.put(
+                            ("dir", f"[RESTRICTED] {code}  {url}\n", "warn")
+                        )
+
+                    else:
+                        self.scan_queue.put(
+                            ("dir", f"[INFO]       {code}  {url}\n", "muted")
+                        )
+
             except urllib.error.HTTPError as e:
                 if e.code in (401, 403):
-                    found += 1
-                    self.scan_queue.put(("dir", f"[INTERESTING] {e.code}  {url}\n", "warn"))
+                    restricted += 1
+                    self.scan_queue.put(
+                        ("dir", f"[RESTRICTED] {e.code}  {url}\n", "warn")
+                    )
+
+                elif e.code == 404:
+                    not_found += 1
+
+                else:
+                    errors += 1
+
             except Exception:
-                continue
-        self.scan_queue.put(("dir", f"\nDirectory scan complete. Interesting paths found: {found}\n", "accent"))
-        self.scan_queue.put(("dir_summary", {"count": found}, None))
+                errors += 1
+
+        interesting_total = found + restricted
+
+        self.scan_queue.put(("dir", "\n" + "-" * 70 + "\n", "muted"))
+        self.scan_queue.put(("dir", "SCAN SUMMARY\n", "accent"))
+        self.scan_queue.put(("dir", "-" * 70 + "\n", "muted"))
+        self.scan_queue.put(("dir", f"Found Paths           : {found}\n", "safe"))
+        self.scan_queue.put(("dir", f"Restricted Paths      : {restricted}\n", "warn"))
+        self.scan_queue.put(("dir", f"Interesting Total     : {interesting_total}\n", "accent"))
+        self.scan_queue.put(("dir", f"Not Found             : {not_found}\n", "muted"))
+        self.scan_queue.put(("dir", f"Errors/Timeouts       : {errors}\n", "muted"))
+        self.scan_queue.put(("dir", "-" * 70 + "\n", "muted"))
+
+        if interesting_total > 0:
+            self.scan_queue.put(
+                ("dir", "\n[NOTE] Found or restricted paths may indicate exposed web resources worth reviewing.\n",
+                 "warn")
+            )
+        else:
+            self.scan_queue.put(
+                ("dir", "\n[NOTE] No interesting paths were discovered using this wordlist.\n", "muted")
+            )
+
+        self.scan_queue.put(("dir", "\nDirectory scan complete.\n", "accent"))
+        self.scan_queue.put(("dir_summary", {"count": interesting_total}, None))
 
     # ============================================================
     # SUBDOMAIN RECON TAB
